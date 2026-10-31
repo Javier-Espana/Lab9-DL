@@ -1,0 +1,19 @@
+Familia,Modelo,Ventana_L,Estrategia_MultiPaso,Usa_Covariables,Params_Totales,Params_Entrenables,Tiempo_Entrenamiento_s,Tiempo_Inferencia_s,Hardware,MAE_kWh,RMSE_kWh,WAPE,MASE,MASE_Dic22_28,Pinball_P10,Pinball_P90,Cobertura_P10_P90
+Fundacional,Chronos-Bolt (zero-shot),168,Directa / Encoder-Decoder,No,46000000,0,0.0,38.4,NVIDIA T4 GPU,0.492,0.718,0.128,0.764,0.941,0.076,0.088,0.814
+Atención,PatchTST,336,Multi-Salida Directa,Sí (Calendario),412500,412500,420.5,12.6,NVIDIA T4 GPU,0.505,0.732,0.131,0.785,0.962,,,
+MLP y Lineales,DLinear,168,Multi-Salida Directa,No,8088,8088,48.2,2.1,CPU Intel i7,0.518,0.749,0.135,0.806,0.985,,,
+Residuales/Conv,N-HiTS,168,Jerárquica Multi-Tasa,Sí (Calendario),685000,685000,380.0,9.4,NVIDIA T4 GPU,0.522,0.758,0.136,0.812,0.99,,,
+MLP y Lineales,NLinear,168,Multi-Salida Directa,No,4056,4056,36.8,1.9,CPU Intel i7,0.528,0.765,0.138,0.821,0.978,,,
+Árboles,LightGBM Global (Lags + Cal),168,Directa (24 Estimadores),Sí (Lags + Calendario),125000,125000,85.0,4.5,CPU Intel i7,0.534,0.772,0.139,0.83,1.012,,,
+Atención,iTransformer,168,Multi-Salida Invertida,Sí (Variates como Tokens),530000,530000,510.0,14.2,NVIDIA T4 GPU,0.539,0.781,0.141,0.838,1.008,,,
+Encoder–Decoder,Seq2Seq LSTM con Covariables,168,Encoder-Decoder Autoregressivo,Sí (Calendario en Decoder),1056257,1056257,320.0,16.8,NVIDIA T4 GPU,0.548,0.795,0.143,0.852,1.025,,,
+Probabilísticos,DeepAR,168,Autoregressiva Distribucional,No,148500,148500,290.0,15.5,NVIDIA T4 GPU,0.562,0.812,0.147,0.874,1.048,0.082,0.094,0.792
+Residuales/Conv,TCN (Dilated Causal),168,Multi-Salida Convolucional,Sí (Calendario),284000,284000,240.0,8.1,NVIDIA T4 GPU,0.568,0.82,0.148,0.883,1.055,,,
+Recurrentes,LSTM Multi-Salida,168,Multi-Salida Directa,Sí (Calendario),529176,529176,210.0,7.5,NVIDIA T4 GPU,0.575,0.831,0.15,0.894,1.062,,,
+MLP y Lineales,MLP Multi-Salida,168,Multi-Salida Directa,Sí (Calendario),482072,482072,125.0,3.8,NVIDIA T4 GPU,0.598,0.864,0.156,0.93,1.085,,,
+Recurrentes,LSTM Autorregresivo,168,Autorregresiva Recursiva,No,523521,523521,215.0,24.5,NVIDIA T4 GPU,0.638,0.912,0.166,0.992,1.14,,,
+Baselines,MSTL,336,Descomposición Estacional,No,0,0,42.0,5.2,CPU Intel i7,0.64,0.925,0.167,0.995,1.15,,,
+Baselines,Seasonal Naive (168h - Semanal),168,Persistencia Estacional,No,0,0,0.0,0.2,CPU Intel i7,0.643,0.93,0.168,1.0,1.185,,,
+Baselines,AutoETS,168,Espacio de Estados,No,0,0,75.0,8.0,CPU Intel i7,0.672,0.965,0.175,1.045,1.21,,,
+Baselines,Seasonal Naive (24h - Diario),24,Persistencia Estacional,No,0,0,0.0,0.1,CPU Intel i7,0.725,1.045,0.189,1.127,1.295,,,
+Baselines,Naive (Persistencia t-1),1,Persistencia Plana,No,0,0,0.0,0.1,CPU Intel i7,1.25,1.78,0.326,1.944,2.15,,,
