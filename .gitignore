@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Entornos virtuales
+venv/
+env/
+.env/
+.venv/
+
+# Datos (archivos grandes)
+data/raw/electricity.zip
+data/raw/LD2011_2014.txt
+
+# Modelos entrenados (pesos grandes)
+models/checkpoints/*.pt
+models/checkpoints/*.pth
+
+# Salidas temporales
+*.log
+*.tmp
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Outputs de predicciones (se versionan solo los finales)
+outputs/predictions_temp_*.csv

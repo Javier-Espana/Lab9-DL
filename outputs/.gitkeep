@@ -1,0 +1,7 @@
+# outputs/.gitkeep – Este directorio almacena las salidas del proyecto
+
+# Los archivos que SÍ se versionan:
+# - predictions.csv (entregable final)
+# - metrics_*.csv (métricas por modelo)
+# - tabla_comparativa.csv
+# - figures/*.png (gráficas)

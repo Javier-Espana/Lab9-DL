@@ -1,0 +1,34 @@
+# Dependencias – Lab 9: Series de Tiempo
+# Python >= 3.10
+
+# ── Core científico ────────────────────────────────────────────────────────────
+numpy>=1.26
+pandas>=2.1
+scipy>=1.11
+scikit-learn>=1.4
+
+# ── Visualización ──────────────────────────────────────────────────────────────
+matplotlib>=3.8
+seaborn>=0.13
+
+# ── PyTorch ───────────────────────────────────────────────────────────────────
+torch>=2.2
+torchvision>=0.17
+
+# ── Forecasting: estadísticos y ML ────────────────────────────────────────────
+statsforecast>=1.7          # Naive, Seasonal Naive, MSTL, AutoETS
+lightgbm>=4.3               # LightGBM global
+holidays>=0.46              # Feriados de Portugal
+
+# ── Forecasting: deep learning (Nixtla) ───────────────────────────────────────
+neuralforecast>=1.7         # N-HiTS, TCN, PatchTST, TFT, iTransformer, DeepAR
+
+# ── Chronos (zero-shot) ───────────────────────────────────────────────────────
+git+https://github.com/amazon-science/chronos-forecasting.git
+
+# ── Utilidades ────────────────────────────────────────────────────────────────
+tqdm>=4.66
+joblib>=1.3
+pyarrow>=14.0              # Para guardar .parquet
+jupyter>=1.0
+ipywidgets>=8.1
