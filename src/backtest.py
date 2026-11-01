@@ -1,224 +1,210 @@
 """
-backtest.py - Walk-forward validation (backtesting) for time-series forecasting models.
+src/backtest.py
+Protocolo de backtesting con origen móvil (rolling-origin) para todos los modelos.
 
-Supports monthly retraining and returns a comprehensive dictionary of metrics.
+Implementado UNA sola vez; todos los modelos reciben la misma función backtest().
+
+Diseño:
+  - Prueba: 2014-10-01 a 2014-12-31, 92 orígenes.
+  - Cada origen avanza 24 h.
+  - En cada origen el modelo recibe datos hasta las 23:00 del día anterior
+    y pronostica las 24 h siguientes.
+  - Los pesos se entrenan una vez (hasta 2014-09-30); los modelos de estadística
+    y LightGBM pueden re-ajustarse con ventana expandible si se indica.
 """
+from __future__ import annotations
+
+import time
+from typing import Callable, Protocol, Any, Dict, Optional
 
 import numpy as np
 import pandas as pd
-from typing import Any, Dict, Optional
+import torch
+
+from src.metrics import evaluate_all, mae_per_horizon, pinball_loss, coverage, mae, rmse, wape, mape, mase
 
 
-# ---------------------------------------------------------------------------
-# Metric helpers
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Protocolo de modelo (duck-typing)
+# ─────────────────────────────────────────────────────────────────────────────
 
-def mae(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Mean Absolute Error."""
-    return float(np.mean(np.abs(y_true - y_pred)))
-
-
-def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Root Mean Squared Error."""
-    return float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
-
-
-def wape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Weighted Absolute Percentage Error (robust to near-zero values)."""
-    denom = np.sum(np.abs(y_true))
-    if denom == 0:
-        return float("nan")
-    return float(np.sum(np.abs(y_true - y_pred)) / denom)
-
-
-def mape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-8) -> float:
-    """Mean Absolute Percentage Error.
-
-    WARNING: unstable when y_true contains values near zero.
-    Use WAPE as an alternative in those cases.
+class ForecastModel(Protocol):
     """
-    return float(np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + eps))))
-
-
-def mase(y_true: np.ndarray, y_pred: np.ndarray,
-         y_train: np.ndarray, seasonality: int = 24) -> float:
-    """Mean Absolute Scaled Error.
-
-    Scales MAE by the in-sample naive seasonal forecast error.
+    Interfaz mínima que cualquier modelo debe cumplir para ser evaluado
+    por la función backtest().
     """
-    naive_errors = np.abs(y_train[seasonality:] - y_train[:-seasonality])
-    scale = np.mean(naive_errors)
-    if scale == 0:
-        return float("nan")
-    return float(np.mean(np.abs(y_true - y_pred)) / scale)
+
+    def predict(
+        self,
+        history: pd.DataFrame,
+        horizon: int,
+        origin_time: pd.Timestamp,
+    ) -> np.ndarray:
+        """
+        Genera pronósticos para las `horizon` horas siguientes a origin_time.
+
+        Args:
+            history     : DataFrame (T x N_clientes), datos disponibles
+                          hasta (origin_time - 1 hora) inclusive.
+            horizon     : número de pasos a pronosticar (H = 24).
+            origin_time : instante en que se emite el pronóstico (00:00).
+
+        Returns:
+            array de shape (N_clientes, horizon) en kWh (escala original).
+        """
+        ...
+
+    @property
+    def name(self) -> str:
+        """Nombre del modelo (para la tabla comparativa)."""
+        ...
 
 
-def mae_by_horizon(y_true: np.ndarray, y_pred: np.ndarray,
-                   horizon: int = 24) -> np.ndarray:
-    """Return MAE for each forecast step h = 1 .. horizon.
-
-    Expects y_true and y_pred shaped (n_windows, horizon).
-    """
-    errors = np.abs(y_true - y_pred)   # (n_windows, horizon)
-    return errors.mean(axis=0)         # (horizon,)
-
-
-def mae_by_hour(timestamps: pd.DatetimeIndex,
-                y_true: np.ndarray, y_pred: np.ndarray) -> pd.Series:
-    """Return MAE grouped by hour of day (0-23).
-
-    Parameters
-    ----------
-    timestamps : DatetimeIndex of length n_windows * horizon (flat).
-    y_true, y_pred : flat arrays of the same length.
-    """
-    df = pd.DataFrame({"hour": timestamps.hour,
-                       "error": np.abs(y_true - y_pred)})
-    return df.groupby("hour")["error"].mean()
-
-
-# ---------------------------------------------------------------------------
-# Core backtest function
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# Función principal
+# ─────────────────────────────────────────────────────────────────────────────
 
 def backtest(
-    model: Any,
-    dataset: pd.DataFrame,
-    config: Optional[Dict] = None,
-) -> Dict:
-    """Walk-forward (expanding-window) backtesting with optional monthly retraining.
-
-    Parameters
-    ----------
-    model : object
-        Must implement:
-          - ``fit(X_train, y_train)``   – trains the model on a training slice.
-          - ``predict(X)``              – returns a 1-D array of point forecasts.
-        A ``seasonality`` attribute (int, default 24) is read if present.
-
-    dataset : pd.DataFrame
-        Must contain:
-          - A DatetimeIndex (hourly resolution assumed).
-          - A column ``"y"``  with the target variable (energy consumption).
-          - Optionally other columns used as features by the model.
-
-    config : dict, optional
-        Keys
-        ----
-        horizon         int  (default 24)    – forecast horizon in steps.
-        initial_train   int  (default 8760)  – minimum training observations.
-        step            int  (default 24)    – steps to advance window each iter.
-        monthly_retrain bool (default True)  – re-fit at the start of each month.
-        seasonality     int  (default 24)    – used for MASE denominator.
-        verbose         bool (default False).
-
-    Returns
-    -------
-    dict with keys:
-        metrics      – dict: mae, rmse, wape, mape, mase (scalars).
-        mae_horizon  – np.ndarray shape (horizon,).
-        mae_hour     – pd.Series indexed 0-23.
-        predictions  – pd.DataFrame with columns y_true, y_pred (DatetimeIndex).
-        windows      – list of dicts (train_end, test_start, test_end) per window.
+    model: ForecastModel,
+    panel: pd.DataFrame,
+    y_train: np.ndarray,
+    H: int = 24,
+    test_start: str = "2014-10-01",
+    test_end: str = "2014-12-31",
+    seasonality: int = 24,
+    return_predictions: bool = True,
+    verbose: bool = True,
+) -> dict:
     """
-    cfg = config or {}
-    horizon: int           = cfg.get("horizon", 24)
-    initial_train: int     = cfg.get("initial_train", 8760)
-    step: int              = cfg.get("step", 24)
-    monthly_retrain: bool  = cfg.get("monthly_retrain", True)
-    seasonality: int       = cfg.get("seasonality",
-                                     getattr(model, "seasonality", 24))
-    verbose: bool          = cfg.get("verbose", False)
+    Backtesting con origen móvil diario sobre el período de prueba.
 
-    y = dataset["y"].values
-    feature_cols = [c for c in dataset.columns if c != "y"]
-    X = dataset[feature_cols].values if feature_cols else None
-    timestamps = dataset.index
+    Args:
+        model            : objeto con interfaz ForecastModel.
+        panel            : DataFrame completo (T x N) con frecuencia horaria.
+        y_train          : array (N, T_train) con la serie de entrenamiento
+                           en kWh original, para calcular MASE.
+        H                : horizonte (24 h).
+        test_start       : primer día de prueba (emite pronóstico a las 00:00).
+        test_end         : último día de prueba.
+        seasonality      : período del naive seasonal para MASE.
+        return_predictions: si True devuelve DataFrame con (unique_id, ds, y_hat).
+        verbose          : si True imprime progreso.
 
-    all_true, all_pred, all_ts = [], [], []
-    windows = []
+    Returns:
+        dict con:
+          - metrics      : dict {MAE, RMSE, WAPE, MAPE, MASE}
+          - mae_horizon  : array (H,) — MAE por paso del horizonte
+          - predictions  : DataFrame (unique_id, ds, modelo, y_hat) o None
+          - inference_time: segundos totales de inferencia
+    """
+    origins = pd.date_range(start=test_start, end=test_end, freq="D")
+    n_origins = len(origins)
 
-    current_month: Optional[int] = None
-    model_fitted = False
+    all_true  = []
+    all_pred  = []
+    pred_rows = []
 
-    t = initial_train
-    while t + horizon <= len(y):
-        train_slice = slice(0, t)
-        test_slice  = slice(t, t + horizon)
+    t_inference_start = time.perf_counter()
 
-        y_train = y[train_slice]
-        y_test  = y[test_slice]
-        ts_test = timestamps[test_slice]
+    for i, origin in enumerate(origins):
+        cutoff = origin - pd.Timedelta(hours=1)
+        history = panel.loc[:cutoff]
 
-        # Monthly retraining logic
-        month_now = ts_test[0].month if hasattr(ts_test[0], "month") else None
-        needs_fit = (
-            not model_fitted
-            or (monthly_retrain and month_now != current_month)
-        )
+        preds = model.predict(history, H, origin)  # (N, H)
 
-        if needs_fit:
-            if verbose:
-                print(f"  [backtest] Fitting at t={t}, month={month_now}")
-            X_train = X[train_slice] if X is not None else y_train
-            model.fit(X_train, y_train)
-            model_fitted = True
-            current_month = month_now
+        future_idx = pd.date_range(start=origin, periods=H, freq="h")
+        valid_idx = future_idx.intersection(panel.index)
+        true_vals = panel.loc[valid_idx].values.T   # (N, len(valid_idx))
 
-        X_test = X[test_slice] if X is not None else y[train_slice]
-        y_hat = np.asarray(model.predict(X_test)).ravel()[:horizon]
+        if len(valid_idx) < H:
+            true_full = np.full((preds.shape[0], H), np.nan)
+            true_full[:, : len(valid_idx)] = true_vals
+            true_vals = true_full
 
-        all_true.append(y_test)
-        all_pred.append(y_hat)
-        all_ts.append(ts_test)
+        all_true.append(true_vals)
+        all_pred.append(preds)
 
-        windows.append({
-            "train_end":  timestamps[t - 1],
-            "test_start": ts_test[0],
-            "test_end":   ts_test[-1],
-        })
+        if return_predictions:
+            clients = panel.columns
+            for c_idx, client in enumerate(clients):
+                for h_idx, ts in enumerate(future_idx):
+                    pred_rows.append(
+                        {
+                            "unique_id": client,
+                            "ds": ts,
+                            "modelo": getattr(model, "name", "model"),
+                            "y_hat": float(preds[c_idx, h_idx]),
+                        }
+                    )
 
-        t += step
+        if verbose and (i % 20 == 0 or i == n_origins - 1):
+            print(f"  Origen {i+1:3d}/{n_origins} — {origin.date()}", end="\r")
 
-    # --- flatten ---
-    y_true_flat = np.concatenate(all_true)
-    y_pred_flat = np.concatenate(all_pred)
-    ts_flat     = timestamps[0:0].append([idx for idx in all_ts])
-
-    # --- scalar metrics ---
-    y_train_full = y[:initial_train]
-    metrics = {
-        "mae":  mae(y_true_flat, y_pred_flat),
-        "rmse": rmse(y_true_flat, y_pred_flat),
-        "wape": wape(y_true_flat, y_pred_flat),
-        "mape": mape(y_true_flat, y_pred_flat),
-        "mase": mase(y_true_flat, y_pred_flat, y_train_full, seasonality),
-    }
-
-    # --- MAE by horizon ---
-    mat_true = np.array(all_true)   # (n_windows, horizon)
-    mat_pred = np.array(all_pred)
-    mae_h    = mae_by_horizon(mat_true, mat_pred, horizon)
-
-    # --- MAE by hour ---
-    mae_h_of_day = mae_by_hour(ts_flat, y_true_flat, y_pred_flat)
-
-    # --- predictions DataFrame ---
-    preds_df = pd.DataFrame({
-        "timestamp": ts_flat,
-        "y_true":    y_true_flat,
-        "y_pred":    y_pred_flat,
-    }).set_index("timestamp")
-
+    inference_time = time.perf_counter() - t_inference_start
     if verbose:
-        print("\n=== Backtest results ===")
-        for k, v in metrics.items():
-            print(f"  {k.upper():6s}: {v:.4f}")
+        print()
+
+    y_true_arr = np.concatenate(all_true, axis=1).reshape(-1, H)
+    y_pred_arr = np.concatenate(all_pred, axis=1).reshape(-1, H)
+
+    valid_mask = ~np.isnan(y_true_arr).any(axis=1)
+    y_true_arr = y_true_arr[valid_mask]
+    y_pred_arr = y_pred_arr[valid_mask]
+
+    metrics = evaluate_all(
+        y_true_arr, y_pred_arr,
+        y_train=y_train.reshape(-1),
+        seasonality=seasonality,
+        model_name=getattr(model, "name", "model"),
+    )
+    metrics["inference_time_s"] = round(inference_time, 2)
+
+    mae_h = mae_per_horizon(y_true_arr, y_pred_arr)
+    predictions_df = pd.DataFrame(pred_rows) if return_predictions else None
 
     return {
-        "metrics":     metrics,
+        "metrics": metrics,
         "mae_horizon": mae_h,
-        "mae_hour":    mae_h_of_day,
-        "predictions": preds_df,
-        "windows":     windows,
+        "predictions": predictions_df,
+        "inference_time": inference_time,
     }
+
+
+def backtest_with_refit(
+    model_factory: Callable[[], ForecastModel],
+    panel: pd.DataFrame,
+    y_train: np.ndarray,
+    H: int = 24,
+    test_start: str = "2014-10-01",
+    test_end: str = "2014-12-31",
+    seasonality: int = 24,
+    verbose: bool = True,
+) -> dict:
+    """
+    Backtesting con origen móvil reentrenando al inicio de cada mes.
+    """
+    origins = pd.date_range(start=test_start, end=test_end, freq="D")
+    months  = sorted(set(o.to_period("M") for o in origins))
+
+    all_results = []
+    for month in months:
+        if verbose:
+            print(f"  Reentrenando para {month}…")
+        cutoff = month.to_timestamp() - pd.Timedelta(hours=1)
+        panel_train = panel.loc[:cutoff]
+
+        model = model_factory()
+        month_origins = [o for o in origins if o.to_period("M") == month]
+        res = backtest(
+            model, panel,
+            y_train=panel_train.values.T,
+            H=H, test_start=str(month_origins[0].date()),
+            test_end=str(month_origins[-1].date()),
+            seasonality=seasonality, verbose=verbose,
+        )
+        all_results.append(res)
+
+    all_preds = pd.concat(
+        [r["predictions"] for r in all_results if r["predictions"] is not None]
+    )
+    return {"monthly_results": all_results, "predictions": all_preds}

@@ -20,13 +20,9 @@ env/
 .env/
 .venv/
 
-# Datos (archivos grandes)
+# Datos crudos muy pesados (>100MB)
 data/raw/electricity.zip
 data/raw/LD2011_2014.txt
-
-# Modelos entrenados (pesos grandes)
-models/checkpoints/*.pt
-models/checkpoints/*.pth
 
 # Salidas temporales
 *.log
@@ -40,6 +36,3 @@ models/checkpoints/*.pth
 
 # macOS
 .DS_Store
-
-# Outputs de predicciones (se versionan solo los finales)
-outputs/predictions_temp_*.csv
